@@ -1,28 +1,24 @@
-# NOVA AI — modularization patch (Phase 1)
+# NOVA AI — Modularization Phase 2
 
 ## Apply
+Copy the `app/src/main/java/com/aark/novaai/` directory from this ZIP into the same path in your Android project, replacing the Phase 1 files. Keep your existing Gradle configuration and dependencies.
 
-Copy the `app/src/main/java/com/aark/novaai/` directory from this ZIP into the same path in your Android project, replacing the old `MainActivity.kt` and adding the new package files.
+## What changed
+- `ui/HomeDashboardScreen.kt`: dashboard UI and navigation callbacks.
+- `ui/ApiSettingsScreen.kt`: API key settings UI.
+- `ui/ChatScreen.kt`: chat transcript, composer, bubbles, and send/stop controls.
+- `ui/components/NovaUi.kt`: shared Android View styling helpers.
+- `MainActivity.kt`: reduced to screen navigation, chat coordination, and Gemini request lifecycle.
+- Existing `core/`, `ai/`, `chat/`, and `security/` classes are carried forward from Phase 1 unchanged.
 
-No Gradle dependency changes are required. This patch uses the AndroidX Security Crypto dependency already present in the project configuration you supplied.
+## Preserved behavior
+Gemini SSE streaming callbacks, first-token/total timing, STOP cancellation, chat history, API-key save/delete, and the current Android Views UI are retained. Voice assistant and screen vision remain placeholders, not implemented features.
 
-## What moved out of MainActivity
+## Build note
+This is a source patch, not a verified APK. The full Android project and Gradle wrapper were not available in the uploaded source bundle, so run your usual GitHub Actions build after applying it.
 
-- `core/NovaPalette.kt`: shared UI colors.
-- `core/NovaConfig.kt`: Gemini model endpoint and timeout configuration.
-- `core/NovaIdentity.kt`, `core/NovaConstants.kt`: app identity and preference keys.
-- `security/ApiKeyManager.kt`: encrypted API-key storage.
-- `chat/ChatManager.kt`: in-memory Gemini conversation history.
-- `chat/ChatMessage.kt`: chat domain model for the next UI extraction stage.
-- `ai/GeminiRequest.kt`: Gemini request-body builder.
-- `ai/GeminiStreamingClient.kt`: SSE networking, cancellation, error mapping and streaming callbacks.
-
-`MainActivity.kt` still owns the current Android Views screens and navigation. This is intentionally a behavior-preserving first extraction; the dashboard/chat/settings view code has not yet been moved into separate screen classes.
-
-## Important
-
-- The Gemini model ID and endpoint were preserved from the source file you supplied. If that model ID is unavailable for your API key, the app may return an API/model error; this patch does not silently change it.
-- API keys remain encrypted in local app preferences. Do not commit a real key to GitHub.
-- Voice assistant and screen vision remain unimplemented, as they were in the supplied source.
-- The ZIP is a source patch, not a verified APK. The full Android project/Gradle wrapper was not included with the uploaded `MainActivity.kt`, so an APK build could not be run here.
-- Keep your existing `memory1.md` through `memory6.md`; they were not part of the uploaded file and are not replaced by this patch. `memory7.md` records this refactor stage.
+## Apply safely
+1. Commit or back up your working Phase 1 project.
+2. Copy this ZIP's `app/src/main/java/com/aark/novaai/` folder into the matching project path.
+3. Run GitHub Actions. If it fails, send the complete build log; do not manually mix Phase 1 and Phase 2 files.
+4. Test Home → API Settings → save/delete key → Chat → streaming response → STOP.
