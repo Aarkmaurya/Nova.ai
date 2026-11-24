@@ -1,6 +1,8 @@
 package com.aark.novaai
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.widget.LinearLayout
@@ -13,6 +15,7 @@ import com.aark.novaai.security.ApiKeyManager
 import com.aark.novaai.ui.ApiSettingsScreen
 import com.aark.novaai.ui.ChatScreen
 import com.aark.novaai.ui.HomeDashboardScreen
+import com.aark.novaai.voice.VoiceManager
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -24,21 +27,55 @@ class MainActivity : Activity() {
     private val networkExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var requestRunning = false
     private var chatScreen: ChatScreen? = null
+    private var voiceManager: VoiceManager? = null
+    private var listeningForSpeech = false
+
+    companion object {
+        private const val REQUEST_RECORD_AUDIO = 4107
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = NovaPalette.background
         window.navigationBarColor = NovaPalette.navigationBar
+        voiceManager = VoiceManager(this, object : VoiceManager.Listener {
+            override fun onListeningReady() {
+                listeningForSpeech = true
+                chatScreen?.setMicActive(true)
+                chatScreen?.setStatus("Listening… speak now")
+            }
+
+            override fun onPartialTranscript(text: String) {
+                chatScreen?.setInputText(text)
+            }
+
+            override fun onTranscript(text: String) {
+                listeningForSpeech = false
+                chatScreen?.setMicActive(false)
+                chatScreen?.setInputText(text)
+                chatScreen?.setStatus("Voice input ready — review and tap SEND")
+            }
+
+            override fun onVoiceError(message: String) {
+                listeningForSpeech = false
+                chatScreen?.setMicActive(false)
+                chatScreen?.setStatus(message)
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            }
+        })
         showHome()
     }
 
     override fun onDestroy() {
         stopRequest(showMessage = false)
+        voiceManager?.shutdown()
+        voiceManager = null
         networkExecutor.shutdownNow()
         super.onDestroy()
     }
 
     private fun showHome() {
+        stopVoiceInput()
         chatScreen = null
         HomeDashboardScreen(this, ::showApiSettings, ::showChat).show()
     }
@@ -49,7 +86,7 @@ class MainActivity : Activity() {
     }
 
     private fun showChat() {
-        val screen = ChatScreen(this, ::showHome, ::sendMessage, { stopRequest() })
+        val screen = ChatScreen(this, ::showHome, ::sendMessage, { stopRequest() }, ::onVoiceInputTap, ::readLatestResponse)
         chatScreen = screen
         setContentView(screen.create())
         if (chatManager.size() == 0) screen.addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
@@ -129,5 +166,57 @@ class MainActivity : Activity() {
         requestRunning = false
         setRequestUi(false, "Request stopped")
         if (showMessage && chatScreen != null) chatScreen?.addChatBubble("assistant", "Request stopped.")
+    }
+
+
+    private fun onVoiceInputTap() {
+        if (listeningForSpeech) {
+            stopVoiceInput()
+            chatScreen?.setStatus("Voice input stopped")
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            return
+        }
+        voiceManager?.startListening()
+    }
+
+    private fun stopVoiceInput() {
+        voiceManager?.stopListening()
+        listeningForSpeech = false
+        chatScreen?.setMicActive(false)
+    }
+
+    private fun readLatestResponse() {
+        var latest = ""
+        for (index in chatManager.size() - 1 downTo 0) {
+            val item = chatManager.messageAt(index) ?: continue
+            if (item.optString("role") != "model") continue
+            latest = item.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty()
+            if (latest.isNotBlank()) break
+        }
+        if (latest.isBlank()) {
+            Toast.makeText(this, "NOVA has no response to read yet.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (voiceManager?.speak(latest) != true) {
+            Toast.makeText(this, "Text-to-speech is unavailable for the current language.", Toast.LENGTH_LONG).show()
+        } else {
+            chatScreen?.setStatus("Reading the latest response aloud")
+        }
+    }
+
+    @Deprecated("Use the platform permission result callback")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                voiceManager?.startListening()
+            } else {
+                chatScreen?.setStatus("Microphone permission was not granted")
+                Toast.makeText(this, "Allow microphone permission to use voice input.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 }
