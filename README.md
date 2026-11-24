@@ -1,24 +1,32 @@
-# NOVA AI — Modularization Phase 2
+# NOVA AI — Voice Foundation (Phase 3)
+
+## What this phase adds
+- Explicit tap-to-start speech input using Android SpeechRecognizer.
+- Partial transcription is shown in the chat input; the final transcript remains editable.
+- The user must tap SEND to submit recognized text to Gemini. Voice recognition never sends a prompt automatically.
+- A READ button speaks the latest completed NOVA response using Android TextToSpeech.
+- Speech output is user-triggered; no always-listening/background microphone behavior is added.
+- Voice components are separated into `voice/VoiceManager.kt`, `voice/SpeechRecognizer.kt`, and `voice/TextToSpeechManager.kt`.
 
 ## Apply
-Copy the `app/src/main/java/com/aark/novaai/` directory from this ZIP into the same path in your Android project, replacing the Phase 1 files. Keep your existing Gradle configuration and dependencies.
+1. Back up/commit the working Phase 2 project.
+2. Copy `app/src/main/java/com/aark/novaai/` from this ZIP into the same project path, replacing the existing package folder.
+3. Open your existing `app/src/main/AndroidManifest.xml`. Add the permission and `<queries>` entries from `AndroidManifest_permissions_snippet.xml` directly under the root `<manifest>` element (not inside `<application>`). Keep your existing application/activity declarations.
+4. No new Gradle dependency is required; SpeechRecognizer and TextToSpeech are Android platform APIs. Keep existing Gradle configuration.
+5. Run GitHub Actions/build.
 
-## What changed
-- `ui/HomeDashboardScreen.kt`: dashboard UI and navigation callbacks.
-- `ui/ApiSettingsScreen.kt`: API key settings UI.
-- `ui/ChatScreen.kt`: chat transcript, composer, bubbles, and send/stop controls.
-- `ui/components/NovaUi.kt`: shared Android View styling helpers.
-- `MainActivity.kt`: reduced to screen navigation, chat coordination, and Gemini request lifecycle.
-- Existing `core/`, `ai/`, `chat/`, and `security/` classes are carried forward from Phase 1 unchanged.
+## Test on the phone
+1. Open NOVA → Voice assistant → chat.
+2. Tap MIC and grant microphone permission when Android asks.
+3. Speak a short prompt. The recognized text appears in the input field.
+4. Review/edit it and tap SEND.
+5. After NOVA completes its reply, tap READ to hear the latest completed reply.
+6. Tap MIC while listening to stop voice input.
 
-## Preserved behavior
-Gemini SSE streaming callbacks, first-token/total timing, STOP cancellation, chat history, API-key save/delete, and the current Android Views UI are retained. Voice assistant and screen vision remain placeholders, not implemented features.
-
-## Build note
-This is a source patch, not a verified APK. The full Android project and Gradle wrapper were not available in the uploaded source bundle, so run your usual GitHub Actions build after applying it.
-
-## Apply safely
-1. Commit or back up your working Phase 1 project.
-2. Copy this ZIP's `app/src/main/java/com/aark/novaai/` folder into the matching project path.
-3. Run GitHub Actions. If it fails, send the complete build log; do not manually mix Phase 1 and Phase 2 files.
-4. Test Home → API Settings → save/delete key → Chat → streaming response → STOP.
+## Notes / limitations
+- Recognition availability and language support depend on the Android speech service installed on the device and its network requirements.
+- Text-to-speech uses the device's default locale/installed voice. Install the relevant Android TTS voice data in system settings if needed.
+- This phase does not add wake-word detection, background listening, incoming-call access, or continuous conversation.
+- Microphone access is requested only after the user taps MIC. No audio recording is saved by this app code.
+- The source ZIP does not include the full Gradle project/manifest; the manifest snippet must be merged manually.
+- No APK build or on-device test has been performed by the patch author.
