@@ -18,8 +18,6 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -431,8 +429,77 @@ class MainActivity : Activity() {
             connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val responseText = if (stream == null) {
-                ""
-            } else {
-                stream.use { input ->
-                    val reader = BufferedReader
+            val responseText = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
+                reader.readText()
+            }.orEmpty()
+            if (code !in 200..299) {
+                val detail = try {
+                    JSONObject(responseText).optJSONObject("error")?.optString("message")
+                } catch (_: Exception) { null }
+                throw GeminiHttpException(code, detail?.takeIf { it.isNotBlank() } ?: "The API request was rejected.")
+            }
+            val response = JSONObject(responseText)
+            val candidates = response.optJSONArray("candidates")
+            val parts = candidates?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+            val answer = buildString {
+                if (parts != null) for (i in 0 until parts.length()) {
+                    val part = parts.optJSONObject(i) ?: continue
+                    val text = part.optString("text")
+                    if (text.isNotBlank()) { if (isNotEmpty()) append("\n"); append(text) }
+                }
+            }.trim()
+            if (answer.isBlank()) throw IllegalStateException("Gemini returned no text. Try rephrasing your message.")
+            val reply = JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", answer)))
+            chatHistory.put(reply)
+            runOnUiThread {
+                if (!isFinishing) {
+                    addChatBubble("assistant", answer)
+                    setRequestUi(false, "Reply received")
+                }
+            }
+        } catch (e: Exception) {
+            if (requestCancelled) return
+            val message = when (e) {
+                is GeminiHttpException -> when (e.code) {
+                    400 -> "Request error (400): ${e.message}"
+                    401, 403 -> "API key rejected or permission missing (${e.code}). Check your key and API access."
+                    404 -> "Model or API endpoint not found (404). Check model availability."
+                    429 -> "Rate limit or quota reached (429). Check your Gemini usage limits."
+                    else -> "Gemini API error (${e.code}): ${e.message}"
+                }
+                else -> if (Thread.currentThread().isInterrupted) "Request stopped." else
+                    "Connection error: ${e.localizedMessage ?: "Please check your internet connection and try again."}"
+            }
+            runOnUiThread {
+                if (!isFinishing) {
+                    addChatBubble("assistant", message)
+                    setRequestUi(false, "Something needs attention")
+                }
+            }
+        } finally {
+            activeConnection = null
+            connection?.disconnect()
+        }
+    }
+
+    private fun setRequestUi(running: Boolean, status: String) {
+        requestRunning = running
+        chatStatus?.text = status
+        sendTile?.isEnabled = !running
+        sendTile?.alpha = if (running) 0.45f else 1f
+        stopTile?.visibility = if (running) View.VISIBLE else View.GONE
+    }
+
+    private fun stopRequest(showMessage: Boolean = true) {
+        if (!requestRunning) return
+        requestCancelled = true
+        activeConnection?.disconnect()
+        requestRunning = false
+        setRequestUi(false, "Request stopped")
+        if (showMessage && chatMessages != null) addChatBubble("assistant", "Request stopped.")
+    }
+
+    private class GeminiHttpException(val code: Int, override val message: String) : Exception(message)
+}
+
+                
