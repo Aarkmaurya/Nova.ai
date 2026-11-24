@@ -14,30 +14,27 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
-import org.json.JSONArray
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import com.aark.novaai.ai.GeminiStreamingClient
+import com.aark.novaai.chat.ChatManager
+import com.aark.novaai.core.NovaPalette
+import com.aark.novaai.security.ApiKeyManager
 
 class MainActivity : Activity() {
-    private val bg = Color.rgb(7, 12, 28)
-    private val surface = Color.rgb(18, 27, 52)
-    private val surface2 = Color.rgb(24, 37, 68)
-    private val cyan = Color.rgb(83, 211, 255)
-    private val purple = Color.rgb(155, 120, 255)
-    private val muted = Color.rgb(165, 181, 211)
+    private val bg = NovaPalette.background
+    private val surface = NovaPalette.surface
+    private val surface2 = NovaPalette.surface2
+    private val cyan = NovaPalette.cyan
+    private val purple = NovaPalette.purple
+    private val muted = NovaPalette.muted
+    private val apiKeyManager by lazy { ApiKeyManager(this) }
+    private val chatManager = ChatManager()
+    private val geminiClient = GeminiStreamingClient()
     private lateinit var root: LinearLayout
 
-    private val chatHistory = JSONArray()
     private val networkExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    @Volatile private var activeConnection: HttpURLConnection? = null
     @Volatile private var requestRunning = false
-    @Volatile private var requestCancelled = false
     private var chatMessages: LinearLayout? = null
     private var chatScroll: ScrollView? = null
     private var chatInput: EditText? = null
@@ -48,7 +45,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = bg
-        window.navigationBarColor = Color.rgb(10, 15, 31)
+        window.navigationBarColor = NovaPalette.navigationBar
         showHome()
     }
 
@@ -205,17 +202,6 @@ class MainActivity : Activity() {
         addView(label(subtitle, 11f, muted))
     }
 
-    private fun securePrefs() = try {
-        val masterKey = MasterKey.Builder(this)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            this, "nova_secure_settings", masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (_: Exception) { null }
-
     private fun showApiSettings() {
         root = pageRoot()
         root.addView(centerLabel("API KEY SETTINGS", 23f, cyan, true).apply {
@@ -241,21 +227,20 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         root.addView(keyInput, LinearLayout.LayoutParams(-1, dp(58)))
-        val prefs = securePrefs()
-        if (prefs == null) {
+        if (!apiKeyManager.isAvailable()) {
             root.addView(label("Secure storage is unavailable on this device.", 13f, Color.YELLOW))
         } else {
             root.addView(actionTile("Save API key", "Store this key on this device", "✓", cyan) {
                 val value = keyInput.text.toString().trim()
                 if (value.isBlank()) Toast.makeText(this, "Please enter an API key.", Toast.LENGTH_SHORT).show()
                 else {
-                    prefs.edit().putString("gemini_api_key", value).apply()
+                    apiKeyManager.saveApiKey(value)
                     keyInput.text.clear()
                     Toast.makeText(this, "API key saved on this device.", Toast.LENGTH_LONG).show()
                 }
             }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16); bottomMargin = dp(10) })
             root.addView(actionTile("Delete saved key", "Remove the locally stored key", "×", Color.rgb(255, 130, 150)) {
-                prefs.edit().remove("gemini_api_key").apply()
+                apiKeyManager.deleteApiKey()
                 Toast.makeText(this, "Saved key deleted.", Toast.LENGTH_SHORT).show()
             })
         }
@@ -303,7 +288,7 @@ class MainActivity : Activity() {
         root.addView(chatScroll, LinearLayout.LayoutParams(-1, 0, 1f).apply {
             topMargin = dp(5); bottomMargin = dp(12)
         })
-        if (chatHistory.length() == 0) addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
+        if (chatManager.size() == 0) addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
         else rebuildChatBubbles()
 
         val composer = LinearLayout(this).apply {
@@ -401,8 +386,8 @@ class MainActivity : Activity() {
 
     private fun rebuildChatBubbles() {
         chatMessages?.removeAllViews()
-        for (i in 0 until chatHistory.length()) {
-            val item = chatHistory.optJSONObject(i) ?: continue
+        for (i in 0 until chatManager.size()) {
+            val item = chatManager.messageAt(i) ?: continue
             val role = item.optString("role")
             val text = item.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty()
             if (text.isNotBlank()) addChatBubble(if (role == "user") "user" else "assistant", text)
@@ -417,123 +402,58 @@ class MainActivity : Activity() {
         if (requestRunning) return
         val prompt = chatInput?.text?.toString()?.trim().orEmpty()
         if (prompt.isBlank()) return
-        val prefs = securePrefs()
-        val apiKey = prefs?.getString("gemini_api_key", null)
+        val apiKey = apiKeyManager.getApiKey()
         if (apiKey.isNullOrBlank()) {
             Toast.makeText(this, "First save your Gemini API key in API key settings.", Toast.LENGTH_LONG).show()
             return
         }
         chatInput?.text?.clear()
-        chatHistory.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt))))
+        chatManager.addUserMessage(prompt)
         addChatBubble("user", prompt)
-        requestCancelled = false
+        geminiClient.resetCancellation()
         setRequestUi(true, "NOVA is thinking…")
         networkExecutor.execute { performGeminiRequest(apiKey) }
     }
 
     private fun performGeminiRequest(apiKey: String) {
-        var connection: HttpURLConnection? = null
-        val startedAt = System.currentTimeMillis()
-        val fullAnswer = StringBuilder()
-        var firstTokenMillis: Long? = null
-        var liveBubble: TextView? = null
-        try {
-            if (requestCancelled) return
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse")
-            connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 20000
-                readTimeout = 60000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Accept", "text/event-stream")
-                setRequestProperty("x-goog-api-key", apiKey)
-            }
-            activeConnection = connection
-            val body = JSONObject().put("contents", chatHistory)
-            connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
-            val code = connection.responseCode
-            if (code !in 200..299) {
-                val errorText = connection.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
-                val detail = try { JSONObject(errorText).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
-                throw GeminiHttpException(code, detail?.takeIf { it.isNotBlank() } ?: "The API request was rejected.")
-            }
+        geminiClient.execute(apiKey, chatManager.history, object : GeminiStreamingClient.Listener {
+            private var liveBubble: TextView? = null
 
-            runOnUiThread {
-                if (!isFinishing && !requestCancelled) {
+            override fun onStarted() {
+                if (!isFinishing) {
                     liveBubble = addStreamingBubble()
                     chatStatus?.text = "NOVA is replying…"
                 }
             }
 
-            connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
-                while (!requestCancelled) {
-                    val line = reader.readLine() ?: break
-                    if (!line.startsWith("data:")) continue
-                    val data = line.removePrefix("data:").trim()
-                    if (data.isEmpty() || data == "[DONE]") continue
-                    val event = try { JSONObject(data) } catch (_: Exception) { continue }
-                    val candidates = event.optJSONArray("candidates") ?: continue
-                    val content = candidates.optJSONObject(0)?.optJSONObject("content") ?: continue
-                    val parts = content.optJSONArray("parts") ?: continue
-                    val chunk = buildString {
-                        for (i in 0 until parts.length()) {
-                            val part = parts.optJSONObject(i) ?: continue
-                            val piece = part.optString("text")
-                            if (piece.isNotEmpty()) append(piece)
-                        }
-                    }
-                    if (chunk.isNotEmpty()) {
-                        if (firstTokenMillis == null) firstTokenMillis = System.currentTimeMillis() - startedAt
-                        fullAnswer.append(chunk)
-                        val snapshot = fullAnswer.toString()
-                        runOnUiThread {
-                            if (!isFinishing && !requestCancelled) {
-                                if (liveBubble == null) liveBubble = addStreamingBubble()
-                                liveBubble?.text = snapshot
-                                scrollChatToBottom()
-                            }
-                        }
-                    }
+            override fun onChunk(text: String) {
+                if (!isFinishing) {
+                    if (liveBubble == null) liveBubble = addStreamingBubble()
+                    liveBubble?.text = text
+                    scrollChatToBottom()
                 }
             }
 
-            if (requestCancelled) return
-            val answer = fullAnswer.toString().trim()
-            if (answer.isBlank()) throw IllegalStateException("Gemini returned no text. Try rephrasing your message.")
-            chatHistory.put(JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", answer))))
-            val elapsed = (System.currentTimeMillis() - startedAt) / 1000.0
-            val firstToken = (firstTokenMillis ?: 0L) / 1000.0
-            runOnUiThread {
+            override fun onCompleted(answer: String, firstTokenSeconds: Double, totalSeconds: Double) {
+                chatManager.addModelMessage(answer)
                 if (!isFinishing) {
                     liveBubble?.text = answer
-                    setRequestUi(false, "First text ${String.format(java.util.Locale.US, "%.1f", firstToken)}s • Total ${String.format(java.util.Locale.US, "%.1f", elapsed)}s")
+                    setRequestUi(false, "First text ${String.format(java.util.Locale.US, "%.1f", firstTokenSeconds)}s • Total ${String.format(java.util.Locale.US, "%.1f", totalSeconds)}s")
                 }
             }
-        } catch (e: Exception) {
-            if (requestCancelled) return
-            val message = when (e) {
-                is GeminiHttpException -> when (e.code) {
-                    400 -> "Request error (400): ${e.message}"
-                    401, 403 -> "API key rejected or permission missing (${e.code}). Check your key and API access."
-                    404 -> "Streaming model or endpoint not found (404). Check model availability."
-                    429 -> "Rate limit or quota reached (429). Check your Gemini usage limits."
-                    else -> "Gemini API error (${e.code}): ${e.message}"
-                }
-                else -> if (Thread.currentThread().isInterrupted) "Request stopped." else
-                    "Connection error: ${e.localizedMessage ?: "Please check your internet connection and try again."}"
-            }
-            runOnUiThread {
+
+            override fun onFailed(message: String, partialAnswer: String) {
                 if (!isFinishing) {
-                    if (fullAnswer.isEmpty()) addChatBubble("assistant", message)
-                    else liveBubble?.text = fullAnswer.toString() + "\n\n[Stream interrupted: $message]"
+                    if (partialAnswer.isEmpty()) addChatBubble("assistant", message)
+                    else liveBubble?.text = partialAnswer + "\n\n[Stream interrupted: $message]"
                     setRequestUi(false, "Something needs attention")
                 }
             }
-        } finally {
-            activeConnection = null
-            connection?.disconnect()
-        }
+
+            override fun onCancelled() {
+                if (!isFinishing) setRequestUi(false, "Request stopped")
+            }
+        })
     }
 
     private fun setRequestUi(running: Boolean, status: String) {
@@ -546,12 +466,10 @@ class MainActivity : Activity() {
 
     private fun stopRequest(showMessage: Boolean = true) {
         if (!requestRunning) return
-        requestCancelled = true
-        activeConnection?.disconnect()
+        geminiClient.cancel()
         requestRunning = false
         setRequestUi(false, "Request stopped")
         if (showMessage && chatMessages != null) addChatBubble("assistant", "Request stopped.")
     }
 
-    private class GeminiHttpException(val code: Int, override val message: String) : Exception(message)
 }
