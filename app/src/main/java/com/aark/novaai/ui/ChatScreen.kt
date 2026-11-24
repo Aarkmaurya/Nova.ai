@@ -17,13 +17,16 @@ class ChatScreen(
     private val activity: Activity,
     private val onHome: () -> Unit,
     private val onSend: () -> Unit,
-    private val onStop: () -> Unit
+    private val onStop: () -> Unit,
+    private val onVoiceInput: () -> Unit,
+    private val onReadResponse: () -> Unit
 ) {
     private lateinit var messages: LinearLayout
     private lateinit var transcript: ScrollView
     private lateinit var status: TextView
     private lateinit var sendButton: TextView
     private lateinit var stopButton: TextView
+    private lateinit var micButton: TextView
     lateinit var input: EditText
         private set
 
@@ -90,7 +93,23 @@ class ChatScreen(
                 if (actionId == EditorInfo.IME_ACTION_SEND) { onSend(); true } else false
             }
         }
-        composer.addView(input, LinearLayout.LayoutParams(-1, -2))
+        val inputRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        inputRow.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        micButton = NovaUi.centerLabel(activity, "MIC", 11f, Color.WHITE, true).apply {
+            background = NovaUi.rounded(Color.rgb(37, 61, 103), 15f)
+            val p = NovaUi.dp(activity, 12)
+            setPadding(p, NovaUi.dp(activity, 15), p, NovaUi.dp(activity, 15))
+            contentDescription = "Start voice input"
+            isClickable = true
+            setOnClickListener { onVoiceInput() }
+        }
+        inputRow.addView(micButton, LinearLayout.LayoutParams(-2, -2).apply {
+            marginStart = NovaUi.dp(activity, 8)
+        })
+        composer.addView(inputRow)
         val controls = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -110,8 +129,19 @@ class ChatScreen(
             isClickable = true
             setOnClickListener { onStop() }
         }
-        controls.addView(NovaUi.label(activity, "Responses may use your Gemini API quota", 10f, NovaPalette.muted),
+        controls.addView(NovaUi.label(activity, "Gemini responses may use API quota", 9f, NovaPalette.muted),
             LinearLayout.LayoutParams(0, -2, 1f))
+        val readButton = NovaUi.centerLabel(activity, "READ", 10f, Color.WHITE, true).apply {
+            background = NovaUi.rounded(Color.rgb(54, 48, 91), 14f)
+            val h = NovaUi.dp(activity, 11); val w = NovaUi.dp(activity, 10)
+            setPadding(w, h, w, h)
+            isClickable = true
+            setOnClickListener { onReadResponse() }
+            contentDescription = "Read latest NOVA response aloud"
+        }
+        controls.addView(readButton, LinearLayout.LayoutParams(-2, -2).apply {
+            marginEnd = NovaUi.dp(activity, 6)
+        })
         controls.addView(stopButton)
         controls.addView(sendButton, LinearLayout.LayoutParams(-2, -2).apply { marginStart = NovaUi.dp(activity, 8) })
         composer.addView(controls, LinearLayout.LayoutParams(-1, -2).apply { topMargin = NovaUi.dp(activity, 9) })
@@ -172,6 +202,17 @@ class ChatScreen(
     }
 
     fun setStatus(value: String) { status.text = value }
+
+    fun setInputText(value: String) {
+        input.setText(value)
+        input.setSelection(input.text?.length ?: 0)
+    }
+
+    fun setMicActive(active: Boolean) {
+        micButton.text = if (active) "…" else "MIC"
+        micButton.alpha = if (active) 0.65f else 1f
+        micButton.contentDescription = if (active) "Listening" else "Start voice input"
+    }
 
     fun setRequestUi(running: Boolean, value: String) {
         status.text = value
