@@ -379,6 +379,26 @@ class MainActivity : Activity() {
         scrollChatToBottom()
     }
 
+    private fun addStreamingBubble(): TextView {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START
+            setPadding(0, dp(5), 0, dp(5))
+        }
+        val bubble = TextView(this).apply {
+            text = ""
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+            background = rounded(Color.rgb(27, 39, 67), 19f, Color.rgb(50, 72, 111))
+            maxWidth = (resources.displayMetrics.widthPixels * 0.82f).toInt()
+        }
+        container.addView(bubble, LinearLayout.LayoutParams(-2, -2))
+        chatMessages?.addView(container, LinearLayout.LayoutParams(-1, -2))
+        scrollChatToBottom()
+        return bubble
+    }
+
     private fun rebuildChatBubbles() {
         chatMessages?.removeAllViews()
         for (i in 0 until chatHistory.length()) {
@@ -413,48 +433,81 @@ class MainActivity : Activity() {
 
     private fun performGeminiRequest(apiKey: String) {
         var connection: HttpURLConnection? = null
+        val startedAt = System.currentTimeMillis()
+        val fullAnswer = StringBuilder()
+        var firstTokenMillis: Long? = null
+        var liveBubble: TextView? = null
         try {
             if (requestCancelled) return
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent")
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse")
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 20000
                 readTimeout = 60000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "text/event-stream")
                 setRequestProperty("x-goog-api-key", apiKey)
             }
             activeConnection = connection
             val body = JSONObject().put("contents", chatHistory)
             connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
             val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val responseText = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
-                reader.readText()
-            }.orEmpty()
             if (code !in 200..299) {
-                val detail = try {
-                    JSONObject(responseText).optJSONObject("error")?.optString("message")
-                } catch (_: Exception) { null }
+                val errorText = connection.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+                val detail = try { JSONObject(errorText).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
                 throw GeminiHttpException(code, detail?.takeIf { it.isNotBlank() } ?: "The API request was rejected.")
             }
-            val response = JSONObject(responseText)
-            val candidates = response.optJSONArray("candidates")
-            val parts = candidates?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
-            val answer = buildString {
-                if (parts != null) for (i in 0 until parts.length()) {
-                    val part = parts.optJSONObject(i) ?: continue
-                    val text = part.optString("text")
-                    if (text.isNotBlank()) { if (isNotEmpty()) append("\n"); append(text) }
+
+            runOnUiThread {
+                if (!isFinishing && !requestCancelled) {
+                    liveBubble = addStreamingBubble()
+                    chatStatus?.text = "NOVA is replying…"
                 }
-            }.trim()
+            }
+
+            connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { reader ->
+                while (!requestCancelled) {
+                    val line = reader.readLine() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data.isEmpty() || data == "[DONE]") continue
+                    val event = try { JSONObject(data) } catch (_: Exception) { continue }
+                    val candidates = event.optJSONArray("candidates") ?: continue
+                    val content = candidates.optJSONObject(0)?.optJSONObject("content") ?: continue
+                    val parts = content.optJSONArray("parts") ?: continue
+                    val chunk = buildString {
+                        for (i in 0 until parts.length()) {
+                            val part = parts.optJSONObject(i) ?: continue
+                            val piece = part.optString("text")
+                            if (piece.isNotEmpty()) append(piece)
+                        }
+                    }
+                    if (chunk.isNotEmpty()) {
+                        if (firstTokenMillis == null) firstTokenMillis = System.currentTimeMillis() - startedAt
+                        fullAnswer.append(chunk)
+                        val snapshot = fullAnswer.toString()
+                        runOnUiThread {
+                            if (!isFinishing && !requestCancelled) {
+                                if (liveBubble == null) liveBubble = addStreamingBubble()
+                                liveBubble?.text = snapshot
+                                scrollChatToBottom()
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (requestCancelled) return
+            val answer = fullAnswer.toString().trim()
             if (answer.isBlank()) throw IllegalStateException("Gemini returned no text. Try rephrasing your message.")
-            val reply = JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", answer)))
-            chatHistory.put(reply)
+            chatHistory.put(JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", answer))))
+            val elapsed = (System.currentTimeMillis() - startedAt) / 1000.0
+            val firstToken = (firstTokenMillis ?: 0L) / 1000.0
             runOnUiThread {
                 if (!isFinishing) {
-                    addChatBubble("assistant", answer)
-                    setRequestUi(false, "Reply received")
+                    liveBubble?.text = answer
+                    setRequestUi(false, "First text ${String.format(java.util.Locale.US, "%.1f", firstToken)}s • Total ${String.format(java.util.Locale.US, "%.1f", elapsed)}s")
                 }
             }
         } catch (e: Exception) {
@@ -463,7 +516,7 @@ class MainActivity : Activity() {
                 is GeminiHttpException -> when (e.code) {
                     400 -> "Request error (400): ${e.message}"
                     401, 403 -> "API key rejected or permission missing (${e.code}). Check your key and API access."
-                    404 -> "Model or API endpoint not found (404). Check model availability."
+                    404 -> "Streaming model or endpoint not found (404). Check model availability."
                     429 -> "Rate limit or quota reached (429). Check your Gemini usage limits."
                     else -> "Gemini API error (${e.code}): ${e.message}"
                 }
@@ -472,7 +525,8 @@ class MainActivity : Activity() {
             }
             runOnUiThread {
                 if (!isFinishing) {
-                    addChatBubble("assistant", message)
+                    if (fullAnswer.isEmpty()) addChatBubble("assistant", message)
+                    else liveBubble?.text = fullAnswer.toString() + "\n\n[Stream interrupted: $message]"
                     setRequestUi(false, "Something needs attention")
                 }
             }
@@ -501,5 +555,3 @@ class MainActivity : Activity() {
 
     private class GeminiHttpException(val code: Int, override val message: String) : Exception(message)
 }
-
-                
