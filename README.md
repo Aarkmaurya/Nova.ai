@@ -1,20 +1,28 @@
-# NOVA AI 0.3.0 — Gemini Streaming Patch
-
-## What changed
-- Switched the Gemini REST request from `generateContent` to `streamGenerateContent?alt=sse`.
-- Reads Server-Sent Events one `data:` line at a time and appends each text chunk to the live assistant bubble.
-- Displays the first-text latency and total request duration when the stream completes.
-- Keeps the existing saved API key, chat transcript, Stop control, and error handling.
-- Bumped the app module version to 0.3.0 (versionCode 3).
+# NOVA AI — modularization patch (Phase 1)
 
 ## Apply
-Merge the `app` directory into the existing Android project, preserving the exact paths. Keep the existing root Gradle files and GitHub Actions workflow. Do not copy the README or memory files into the Android source directories.
+
+Copy the `app/src/main/java/com/aark/novaai/` directory from this ZIP into the same path in your Android project, replacing the old `MainActivity.kt` and adding the new package files.
+
+No Gradle dependency changes are required. This patch uses the AndroidX Security Crypto dependency already present in the project configuration you supplied.
+
+## What moved out of MainActivity
+
+- `core/NovaPalette.kt`: shared UI colors.
+- `core/NovaConfig.kt`: Gemini model endpoint and timeout configuration.
+- `core/NovaIdentity.kt`, `core/NovaConstants.kt`: app identity and preference keys.
+- `security/ApiKeyManager.kt`: encrypted API-key storage.
+- `chat/ChatManager.kt`: in-memory Gemini conversation history.
+- `chat/ChatMessage.kt`: chat domain model for the next UI extraction stage.
+- `ai/GeminiRequest.kt`: Gemini request-body builder.
+- `ai/GeminiStreamingClient.kt`: SSE networking, cancellation, error mapping and streaming callbacks.
+
+`MainActivity.kt` still owns the current Android Views screens and navigation. This is intentionally a behavior-preserving first extraction; the dashboard/chat/settings view code has not yet been moved into separate screen classes.
 
 ## Important
-- Streaming improves perceived responsiveness by showing partial output; it does not guarantee the model starts generating sooner or reduce total generation time.
-- The endpoint uses the same model ID already present in the user's working non-streaming source. If that model is unavailable for the API project, check the API error and model availability rather than changing keys or sharing them.
-- API keys must remain local and must never be committed to GitHub or pasted into chat.
 
-## Verification status
-- Source edited and inspected; ZIP integrity checked after packaging.
-- No Android Gradle build or live Gemini API call was run in this environment. Run `gradle assembleDebug` in the user's project and test a short prompt on-device.
+- The Gemini model ID and endpoint were preserved from the source file you supplied. If that model ID is unavailable for your API key, the app may return an API/model error; this patch does not silently change it.
+- API keys remain encrypted in local app preferences. Do not commit a real key to GitHub.
+- Voice assistant and screen vision remain unimplemented, as they were in the supplied source.
+- The ZIP is a source patch, not a verified APK. The full Android project/Gradle wrapper was not included with the uploaded `MainActivity.kt`, so an APK build could not be run here.
+- Keep your existing `memory1.md` through `memory6.md`; they were not part of the uploaded file and are not replaced by this patch. `memory7.md` records this refactor stage.
