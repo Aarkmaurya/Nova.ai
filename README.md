@@ -1,42 +1,20 @@
-# NOVA AI — Gemini Chat patch
+# NOVA AI 0.3.0 — Gemini Streaming Patch
 
-This is a **patch** for the existing NOVA AI Android Studio repository, not a complete standalone Android Studio project.
+## What changed
+- Switched the Gemini REST request from `generateContent` to `streamGenerateContent?alt=sse`.
+- Reads Server-Sent Events one `data:` line at a time and appends each text chunk to the live assistant bubble.
+- Displays the first-text latency and total request duration when the stream completes.
+- Keeps the existing saved API key, chat transcript, Stop control, and error handling.
+- Bumped the app module version to 0.3.0 (versionCode 3).
 
-## Replace these files
+## Apply
+Merge the `app` directory into the existing Android project, preserving the exact paths. Keep the existing root Gradle files and GitHub Actions workflow. Do not copy the README or memory files into the Android source directories.
 
-1. `app/src/main/java/com/aark/novaai/MainActivity.kt`
-2. `app/build.gradle.kts`
-3. `app/src/main/AndroidManifest.xml`
+## Important
+- Streaming improves perceived responsiveness by showing partial output; it does not guarantee the model starts generating sooner or reduce total generation time.
+- The endpoint uses the same model ID already present in the user's working non-streaming source. If that model is unavailable for the API project, check the API error and model availability rather than changing keys or sharing them.
+- API keys must remain local and must never be committed to GitHub or pasted into chat.
 
-The supplied `AndroidManifest.xml` is at the ZIP root to make it easy to identify; copy it to `app/src/main/AndroidManifest.xml` in the repository.
-
-Keep your existing root `settings.gradle.kts`, root `build.gradle.kts`, `gradle.properties`, and GitHub Actions workflow.
-
-## Added in this patch
-
-- Gemini text chat screen with user and assistant message bubbles.
-- Multi-turn conversation context kept in memory while the app process is alive.
-- Background network request (does not run on the UI thread).
-- Send and Stop controls, loading/status text, and basic HTTP/network error messages.
-- Uses the API key already saved in the app's encrypted local preferences; the key is sent in the `x-goog-api-key` request header and is not displayed in chat.
-- Adds Android `INTERNET` permission.
-- Uses Gemini REST `generateContent` with model name `gemini-3.5-flash`.
-
-## Important limitations and security
-
-- Chat history is currently memory-only. It is cleared when the app process is ended; it is not saved to disk.
-- The API key remains a client-side key. Encrypted local storage protects it at rest, but an app distributed to others cannot keep a shared API key fully secret. Do not commit a real key to GitHub or share it.
-- The app sends the text you type to Google's Gemini API. Do not enter passwords, OTPs, or other sensitive personal information.
-- Stop disconnects the active HTTP request; the server may already have received the prompt before cancellation.
-- Voice, wake word, screen vision, accessibility automation, and phone actions are not implemented by this patch.
-- The model name may depend on model availability for the API project/key. The app displays an API error if Google rejects the model or request.
-
-## Build and test
-
-1. Replace the three app files listed above.
-2. Commit and push to your existing GitHub repository.
-3. Run the existing GitHub Actions workflow.
-4. Install the resulting debug APK, save your own Gemini API key in NOVA's API Key Settings, then open Gemini Chat and send a simple test message.
-5. If Actions fails, share the complete build log. If chat fails, share the visible error text, but never share the API key.
-
-No Gradle build, APK build, installation, or live API request has been run in this environment.
+## Verification status
+- Source edited and inspected; ZIP integrity checked after packaging.
+- No Android Gradle build or live Gemini API call was run in this environment. Run `gradle assembleDebug` in the user's project and test a short prompt on-device.
