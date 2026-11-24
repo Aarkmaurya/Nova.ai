@@ -431,6 +431,8 @@ class MainActivity : Activity() {
             connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val responseText = stream?.use { input ->
-                BufferedReader(InputStreamReader(input, StandardCharsets.UTF_8)).use { it.readText() }
-            }.orEmpty
+            val responseText = if (stream == null) {
+                ""
+            } else {
+                stream.use { input ->
+                    val reader = BufferedReader
