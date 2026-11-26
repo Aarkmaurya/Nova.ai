@@ -19,8 +19,12 @@ class ChatScreen(
     private val onSend: () -> Unit,
     private val onStop: () -> Unit,
     private val onVoiceInput: () -> Unit,
-    private val onReadResponse: () -> Unit
+    private val onReadResponse: () -> Unit,
+    private val onSpeakText: (String) -> Unit,
+    private val onAutoSpeakChanged: (Boolean) -> Unit,
+    initialAutoSpeak: Boolean
 ) {
+    private var autoSpeakEnabled = initialAutoSpeak
     private lateinit var messages: LinearLayout
     private lateinit var transcript: ScrollView
     private lateinit var status: TextView
@@ -98,7 +102,7 @@ class ChatScreen(
             gravity = Gravity.CENTER_VERTICAL
         }
         inputRow.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        micButton = NovaUi.centerLabel(activity, "MIC", 11f, Color.WHITE, true).apply {
+        micButton = NovaUi.centerLabel(activity, "🎙", 19f, Color.WHITE, true).apply {
             background = NovaUi.rounded(Color.rgb(37, 61, 103), 15f)
             val p = NovaUi.dp(activity, 12)
             setPadding(p, NovaUi.dp(activity, 15), p, NovaUi.dp(activity, 15))
@@ -114,14 +118,14 @@ class ChatScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        sendButton = NovaUi.centerLabel(activity, "SEND  ↑", 13f, Color.rgb(5, 20, 36), true).apply {
+        sendButton = NovaUi.centerLabel(activity, "➤", 20f, Color.rgb(5, 20, 36), true).apply {
             background = NovaUi.gradient(NovaPalette.cyan, Color.rgb(107, 164, 255), 16f)
             val h = NovaUi.dp(activity, 12); val w = NovaUi.dp(activity, 20)
             setPadding(w, h, w, h)
             isClickable = true
             setOnClickListener { onSend() }
         }
-        stopButton = NovaUi.centerLabel(activity, "STOP", 12f, Color.WHITE, true).apply {
+        stopButton = NovaUi.centerLabel(activity, "■", 18f, Color.WHITE, true).apply {
             background = NovaUi.rounded(Color.rgb(95, 43, 65), 16f)
             val h = NovaUi.dp(activity, 12); val w = NovaUi.dp(activity, 17)
             setPadding(w, h, w, h)
@@ -131,7 +135,28 @@ class ChatScreen(
         }
         controls.addView(NovaUi.label(activity, "Gemini responses may use API quota", 9f, NovaPalette.muted),
             LinearLayout.LayoutParams(0, -2, 1f))
-        val readButton = NovaUi.centerLabel(activity, "READ", 10f, Color.WHITE, true).apply {
+        val autoSpeakButton = NovaUi.centerLabel(
+            activity, if (autoSpeakEnabled) "🔊" else "🔇", 18f, Color.WHITE, true
+        ).apply {
+            background = NovaUi.rounded(if (autoSpeakEnabled) Color.rgb(24, 104, 91) else Color.rgb(49, 61, 83), 14f)
+            val h = NovaUi.dp(activity, 11); val w = NovaUi.dp(activity, 8)
+            setPadding(w, h, w, h)
+            isClickable = true
+            contentDescription = if (autoSpeakEnabled) "Automatic speech is on. Tap to turn off" else "Automatic speech is off. Tap to turn on"
+            setOnClickListener {
+                autoSpeakEnabled = !autoSpeakEnabled
+                text = if (autoSpeakEnabled) "🔊" else "🔇"
+                contentDescription = if (autoSpeakEnabled) "Automatic speech is on. Tap to turn off" else "Automatic speech is off. Tap to turn on"
+                background = NovaUi.rounded(
+                    if (autoSpeakEnabled) Color.rgb(24, 104, 91) else Color.rgb(49, 61, 83), 14f
+                )
+                onAutoSpeakChanged(autoSpeakEnabled)
+            }
+        }
+        controls.addView(autoSpeakButton, LinearLayout.LayoutParams(-2, -2).apply {
+            marginEnd = NovaUi.dp(activity, 6)
+        })
+        val readButton = NovaUi.centerLabel(activity, "🔊", 18f, Color.WHITE, true).apply {
             background = NovaUi.rounded(Color.rgb(54, 48, 91), 14f)
             val h = NovaUi.dp(activity, 11); val w = NovaUi.dp(activity, 10)
             setPadding(w, h, w, h)
@@ -166,8 +191,29 @@ class ChatScreen(
             maxWidth = (activity.resources.displayMetrics.widthPixels * 0.82f).toInt()
         }
         container.addView(bubble, LinearLayout.LayoutParams(-2, -2))
+        if (role != "user") addSpeakerControl(container, message)
         messages.addView(container, LinearLayout.LayoutParams(-1, -2))
         scrollToBottom()
+    }
+
+    private fun addSpeakerControl(container: LinearLayout, message: String) {
+        val speak = NovaUi.centerLabel(activity, "🔊", 18f, NovaPalette.cyan, true).apply {
+            val p = NovaUi.dp(activity, 7)
+            setPadding(p, NovaUi.dp(activity, 4), p, NovaUi.dp(activity, 4))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Speak this NOVA response"
+            setOnClickListener { onSpeakText(message) }
+        }
+        container.addView(speak, LinearLayout.LayoutParams(-2, -2).apply {
+            topMargin = NovaUi.dp(activity, 2)
+        })
+    }
+
+    fun attachSpeakerToBubble(bubble: TextView, message: String) {
+        val container = bubble.parent as? LinearLayout ?: return
+        if (container.childCount > 1) container.removeViewAt(1)
+        addSpeakerControl(container, message)
     }
 
     fun addStreamingBubble(): TextView {
@@ -209,7 +255,7 @@ class ChatScreen(
     }
 
     fun setMicActive(active: Boolean) {
-        micButton.text = if (active) "…" else "MIC"
+        micButton.text = if (active) "…" else "🎙"
         micButton.alpha = if (active) 0.65f else 1f
         micButton.contentDescription = if (active) "Listening" else "Start voice input"
     }
