@@ -15,6 +15,7 @@ import com.aark.novaai.security.ApiKeyManager
 import com.aark.novaai.ui.ApiSettingsScreen
 import com.aark.novaai.ui.ChatScreen
 import com.aark.novaai.ui.HomeDashboardScreen
+import com.aark.novaai.ui.components.NovaUi
 import com.aark.novaai.voice.VoiceManager
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -29,6 +30,7 @@ class MainActivity : Activity() {
     private var chatScreen: ChatScreen? = null
     private var voiceManager: VoiceManager? = null
     private var listeningForSpeech = false
+    private val voicePreferences by lazy { getSharedPreferences("nova_voice_settings", MODE_PRIVATE) }
 
     companion object {
         private const val REQUEST_RECORD_AUDIO = 4107
@@ -86,9 +88,28 @@ class MainActivity : Activity() {
     }
 
     private fun showChat() {
-        val screen = ChatScreen(this, ::showHome, ::sendMessage, { stopRequest() }, ::onVoiceInputTap, ::readLatestResponse)
+        val screen = ChatScreen(
+            this, ::showHome, ::sendMessage, { stopRequest() },
+            ::onVoiceInputTap, ::readLatestResponse, ::speakText, ::saveAutoSpeak,
+            voicePreferences.getBoolean("auto_speak_enabled", false)
+        )
         chatScreen = screen
-        setContentView(screen.create())
+        val chatRoot = screen.create()
+        val baseLeft = NovaUi.dp(this, 14)
+        val baseTop = NovaUi.dp(this, 12)
+        val baseRight = NovaUi.dp(this, 14)
+        val baseBottom = NovaUi.dp(this, 12)
+        chatRoot.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(
+                baseLeft + insets.systemWindowInsetLeft,
+                baseTop + insets.systemWindowInsetTop,
+                baseRight + insets.systemWindowInsetRight,
+                baseBottom + insets.systemWindowInsetBottom
+            )
+            insets
+        }
+        setContentView(chatRoot)
+        chatRoot.requestApplyInsets()
         if (chatManager.size() == 0) screen.addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
         else screen.rebuildChatBubbles(chatManager.history)
         screen.scrollToBottom()
@@ -135,6 +156,8 @@ class MainActivity : Activity() {
                 chatManager.addModelMessage(answer)
                 if (!isFinishing) {
                     liveBubble?.text = answer
+                    liveBubble?.let { chatScreen?.attachSpeakerToBubble(it, answer) }
+                    if (voicePreferences.getBoolean("auto_speak_enabled", false)) speakText(answer)
                     val first = String.format(java.util.Locale.US, "%.1f", firstTokenSeconds)
                     val total = String.format(java.util.Locale.US, "%.1f", totalSeconds)
                     setRequestUi(false, "First text ${first}s • Total ${total}s")
@@ -144,7 +167,11 @@ class MainActivity : Activity() {
             override fun onFailed(message: String, partialAnswer: String) {
                 if (!isFinishing) {
                     if (partialAnswer.isEmpty()) chatScreen?.addChatBubble("assistant", message)
-                    else liveBubble?.text = partialAnswer + "\n\n[Stream interrupted: $message]"
+                    else {
+                        val visibleText = partialAnswer + "\n\n[Stream interrupted: $message]"
+                        liveBubble?.text = visibleText
+                        liveBubble?.let { chatScreen?.attachSpeakerToBubble(it, visibleText) }
+                    }
                     setRequestUi(false, "Something needs attention")
                 }
             }
@@ -188,6 +215,19 @@ class MainActivity : Activity() {
         chatScreen?.setMicActive(false)
     }
 
+    private fun saveAutoSpeak(enabled: Boolean) {
+        voicePreferences.edit().putBoolean("auto_speak_enabled", enabled).apply()
+        chatScreen?.setStatus(if (enabled) "Auto Speak enabled" else "Auto Speak disabled")
+    }
+
+    private fun speakText(text: String) {
+        if (voiceManager?.speak(text) != true) {
+            Toast.makeText(this, "Text-to-speech is unavailable. Check installed voice/language data.", Toast.LENGTH_LONG).show()
+        } else {
+            chatScreen?.setStatus("Speaking response aloud")
+        }
+    }
+
     private fun readLatestResponse() {
         var latest = ""
         for (index in chatManager.size() - 1 downTo 0) {
@@ -200,11 +240,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "NOVA has no response to read yet.", Toast.LENGTH_SHORT).show()
             return
         }
-        if (voiceManager?.speak(latest) != true) {
-            Toast.makeText(this, "Text-to-speech is unavailable for the current language.", Toast.LENGTH_LONG).show()
-        } else {
-            chatScreen?.setStatus("Reading the latest response aloud")
-        }
+        speakText(latest)
     }
 
     @Deprecated("Use the platform permission result callback")
