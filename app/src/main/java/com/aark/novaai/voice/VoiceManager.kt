@@ -22,8 +22,8 @@ class VoiceManager(activity: Activity, private val listener: Listener) {
     fun startListening() = speechRecognizer.start()
     fun stopListening() = speechRecognizer.stop()
     fun speak(text: String): Boolean = textToSpeech.speak(text)
+    fun speak(text: String, onDone: (() -> Unit)?): Boolean = textToSpeech.speak(text, onDone)
     fun stopSpeaking() = textToSpeech.stop()
-
     fun shutdown() {
         speechRecognizer.destroy()
         textToSpeech.shutdown()
