@@ -6,6 +6,8 @@ import android.text.InputType
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
+import android.widget.Switch
+import android.content.SharedPreferences
 import com.aark.novaai.core.NovaPalette
 import com.aark.novaai.security.ApiKeyManager
 import com.aark.novaai.ui.components.NovaUi
@@ -13,6 +15,7 @@ import com.aark.novaai.ui.components.NovaUi
 class ApiSettingsScreen(
     private val activity: Activity,
     private val apiKeyManager: ApiKeyManager,
+    private val voicePreferences: SharedPreferences,
     private val onBack: () -> Unit
 ) {
     fun create(): LinearLayout {
@@ -67,6 +70,23 @@ class ApiSettingsScreen(
             12f, NovaPalette.muted).apply {
             val p = NovaUi.dp(activity, 4)
             setPadding(p, NovaUi.dp(activity, 20), p, NovaUi.dp(activity, 20))
+        })
+        root.addView(NovaUi.label(activity, "VOICE PREFERENCES", 11f, NovaPalette.muted, true).apply {
+            setPadding(NovaUi.dp(activity, 3), NovaUi.dp(activity, 12), 0, NovaUi.dp(activity, 8))
+        })
+        val autoSpeak = Switch(activity).apply {
+            text = "Automatically read NOVA replies"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            isChecked = voicePreferences.getBoolean("auto_speak_enabled", false)
+            setOnCheckedChangeListener { _, checked ->
+                voicePreferences.edit().putBoolean("auto_speak_enabled", checked).apply()
+                Toast.makeText(activity, if (checked) "Auto speak enabled" else "Auto speak disabled", Toast.LENGTH_SHORT).show()
+            }
+        }
+        root.addView(autoSpeak, LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = NovaUi.dp(activity, 4)
+            bottomMargin = NovaUi.dp(activity, 16)
         })
         root.addView(NovaUi.actionTile(activity, "Back to home", "Return to your NOVA dashboard", "‹", NovaPalette.purple, onBack))
         return root
