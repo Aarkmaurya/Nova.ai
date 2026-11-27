@@ -16,6 +16,7 @@ import org.json.JSONArray
 class ChatScreen(
     private val activity: Activity,
     private val onHome: () -> Unit,
+    private val onNewChat: () -> Unit,
     private val onSend: () -> Unit,
     private val onStop: () -> Unit,
     private val onVoiceInput: () -> Unit,
@@ -31,6 +32,7 @@ class ChatScreen(
     private lateinit var sendButton: TextView
     private lateinit var stopButton: TextView
     private lateinit var micButton: TextView
+    private lateinit var newChatButton: TextView
     lateinit var input: EditText
         private set
 
@@ -48,6 +50,18 @@ class ChatScreen(
             addView(NovaUi.label(activity, "Gemini • text conversation", 11f, NovaPalette.muted))
         }
         header.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
+        newChatButton = NovaUi.centerLabel(activity, "＋", 23f, NovaPalette.cyan, true).apply {
+            val p = NovaUi.dp(activity, 9)
+            setPadding(p, NovaUi.dp(activity, 5), p, NovaUi.dp(activity, 5))
+            background = NovaUi.rounded(NovaPalette.surface2, 14f)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Start a new chat. Previous chats are saved"
+            setOnClickListener { onNewChat() }
+        }
+        header.addView(newChatButton, LinearLayout.LayoutParams(-2, -2).apply {
+            marginEnd = NovaUi.dp(activity, 8)
+        })
         val back = NovaUi.centerLabel(activity, "‹ Home", 13f, Color.WHITE, true).apply {
             val h = NovaUi.dp(activity, 10); val w = NovaUi.dp(activity, 12)
             setPadding(w, h, w, h)
@@ -174,6 +188,13 @@ class ChatScreen(
         return root
     }
 
+    fun showNewChatWelcome() {
+        messages.removeAllViews()
+        addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
+        input.setText("")
+        scrollToBottom()
+    }
+
     fun addChatBubble(role: String, message: String) {
         val container = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -265,6 +286,8 @@ class ChatScreen(
         sendButton.isEnabled = !running
         sendButton.alpha = if (running) 0.45f else 1f
         stopButton.visibility = if (running) View.VISIBLE else View.GONE
+        newChatButton.isEnabled = !running
+        newChatButton.alpha = if (running) 0.45f else 1f
     }
 
     fun scrollToBottom() {
