@@ -57,6 +57,16 @@ class ChatManager(context: Context) {
 
     fun messageAt(index: Int): JSONObject? = history.optJSONObject(index)
 
+    /** Removes the most recent model reply so it can be regenerated from the preceding user turn. */
+    fun removeLastModelMessage(): Boolean {
+        if (history.length() == 0) return false
+        val last = history.optJSONObject(history.length() - 1) ?: return false
+        if (last.optString("role") != "model") return false
+        history.remove(history.length() - 1)
+        persist()
+        return true
+    }
+
     fun size(): Int = history.length()
 
     private fun updateSessionAfterMessage(firstUserText: String?) {
