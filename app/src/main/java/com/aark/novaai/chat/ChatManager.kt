@@ -62,7 +62,7 @@ class ChatManager(context: Context) {
     private fun updateSessionAfterMessage(firstUserText: String?) {
         val session = activeSession()
         if (!firstUserText.isNullOrBlank() && session.optString("title") == DEFAULT_TITLE) {
-            session.put("title", firstUserText.trim().replace("\s+".toRegex(), " ").take(TITLE_MAX_LENGTH))
+            session.put("title", firstUserText.trim().replace(Regex("\\s+"), " ").take(TITLE_MAX_LENGTH))
         }
         session.put("updatedAt", System.currentTimeMillis())
         persist()
