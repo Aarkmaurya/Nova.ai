@@ -3,10 +3,7 @@ package com.aark.novaai
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.os.Bundle
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import com.aark.novaai.ai.GeminiStreamingClient
 import com.aark.novaai.chat.ChatManager
@@ -15,12 +12,11 @@ import com.aark.novaai.security.ApiKeyManager
 import com.aark.novaai.ui.ApiSettingsScreen
 import com.aark.novaai.ui.ChatScreen
 import com.aark.novaai.ui.HomeDashboardScreen
-import com.aark.novaai.ui.components.NovaUi
 import com.aark.novaai.voice.VoiceManager
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/** Activity coordinator: screen navigation and Gemini request lifecycle only. */
+/** Activity coordinator: navigation, Gemini requests and explicit voice conversation mode. */
 class MainActivity : Activity() {
     private val apiKeyManager by lazy { ApiKeyManager(this) }
     private val chatManager by lazy { ChatManager(applicationContext) }
@@ -30,10 +26,15 @@ class MainActivity : Activity() {
     private var chatScreen: ChatScreen? = null
     private var voiceManager: VoiceManager? = null
     private var listeningForSpeech = false
+    private var voiceConversationEnabled = false
+    private var currentScreen = SCREEN_HOME
     private val voicePreferences by lazy { getSharedPreferences("nova_voice_settings", MODE_PRIVATE) }
 
     companion object {
         private const val REQUEST_RECORD_AUDIO = 4107
+        private const val SCREEN_HOME = "home"
+        private const val SCREEN_SETTINGS = "settings"
+        private const val SCREEN_CHAT = "chat"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +45,7 @@ class MainActivity : Activity() {
             override fun onListeningReady() {
                 listeningForSpeech = true
                 chatScreen?.setMicActive(true)
-                chatScreen?.setStatus("Listening… speak now")
+                chatScreen?.setVoiceModeState(true, "Listening…")
             }
 
             override fun onPartialTranscript(text: String) {
@@ -55,20 +56,34 @@ class MainActivity : Activity() {
                 listeningForSpeech = false
                 chatScreen?.setMicActive(false)
                 chatScreen?.setInputText(text)
-                chatScreen?.setStatus("Voice input ready — review and tap SEND")
+                if (voiceConversationEnabled) sendMessage()
+                else chatScreen?.setStatus("Voice input ready — tap Send")
             }
 
             override fun onVoiceError(message: String) {
                 listeningForSpeech = false
                 chatScreen?.setMicActive(false)
-                chatScreen?.setStatus(message)
+                if (voiceConversationEnabled) {
+                    voiceConversationEnabled = false
+                    chatScreen?.setVoiceModeState(false, message)
+                } else chatScreen?.setStatus(message)
                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
             }
         })
         showHome()
     }
 
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        when (currentScreen) {
+            SCREEN_CHAT, SCREEN_SETTINGS -> showHome()
+            else -> super.onBackPressed()
+        }
+    }
+
     override fun onDestroy() {
+        voiceConversationEnabled = false
+        stopVoiceInput()
         stopRequest(showMessage = false)
         voiceManager?.shutdown()
         voiceManager = null
@@ -77,28 +92,31 @@ class MainActivity : Activity() {
     }
 
     private fun showHome() {
-        stopVoiceInput()
+        stopVoiceConversation()
         chatScreen = null
+        currentScreen = SCREEN_HOME
         HomeDashboardScreen(this, ::showApiSettings, ::showChat).show()
     }
 
     private fun showApiSettings() {
+        stopVoiceConversation()
         chatScreen = null
-        ApiSettingsScreen(this, apiKeyManager, ::showHome).show()
+        currentScreen = SCREEN_SETTINGS
+        ApiSettingsScreen(this, apiKeyManager, voicePreferences, ::showHome).show()
     }
 
     private fun showChat() {
+        currentScreen = SCREEN_CHAT
         val screen = ChatScreen(
             this, ::showHome, ::startNewChat, ::sendMessage, { stopRequest() },
-            ::onVoiceInputTap, ::readLatestResponse, ::speakText, ::saveAutoSpeak,
-            voicePreferences.getBoolean("auto_speak_enabled", false)
+            ::onVoiceInputTap, ::toggleVoiceConversation, ::speakText, ::regenerateLatest
         )
         chatScreen = screen
         val chatRoot = screen.create()
-        val baseLeft = NovaUi.dp(this, 14)
-        val baseTop = NovaUi.dp(this, 12)
-        val baseRight = NovaUi.dp(this, 14)
-        val baseBottom = NovaUi.dp(this, 12)
+        val baseLeft = com.aark.novaai.ui.components.NovaUi.dp(this, 14)
+        val baseTop = com.aark.novaai.ui.components.NovaUi.dp(this, 8)
+        val baseRight = com.aark.novaai.ui.components.NovaUi.dp(this, 14)
+        val baseBottom = com.aark.novaai.ui.components.NovaUi.dp(this, 8)
         chatRoot.setOnApplyWindowInsetsListener { view, insets ->
             view.setPadding(
                 baseLeft + insets.systemWindowInsetLeft,
@@ -110,23 +128,18 @@ class MainActivity : Activity() {
         }
         setContentView(chatRoot)
         chatRoot.requestApplyInsets()
-        if (chatManager.size() == 0) screen.addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
+        if (chatManager.size() == 0) screen.showWelcome()
         else screen.rebuildChatBubbles(chatManager.history)
         screen.scrollToBottom()
     }
-
 
     private fun startNewChat() {
         if (requestRunning) {
             Toast.makeText(this, "Wait until NOVA finishes the current response.", Toast.LENGTH_SHORT).show()
             return
         }
-        if (chatManager.createNewChat()) {
-            chatScreen?.showNewChatWelcome()
-            chatScreen?.setStatus("New chat started • Previous chat saved")
-        } else {
-            chatScreen?.setStatus("This chat is already empty")
-        }
+        if (chatManager.createNewChat()) chatScreen?.showNewChatWelcome()
+        else chatScreen?.setStatus("This chat is already empty")
     }
 
     private fun sendMessage() {
@@ -136,7 +149,8 @@ class MainActivity : Activity() {
         if (prompt.isBlank()) return
         val apiKey = apiKeyManager.getApiKey()
         if (apiKey.isNullOrBlank()) {
-            Toast.makeText(this, "First save your Gemini API key in API key settings.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "First save your Gemini API key in Settings.", Toast.LENGTH_LONG).show()
+            if (voiceConversationEnabled) stopVoiceConversation()
             return
         }
         screen.input.text.clear()
@@ -149,19 +163,16 @@ class MainActivity : Activity() {
 
     private fun performGeminiRequest(apiKey: String) {
         geminiClient.execute(apiKey, chatManager.history, object : GeminiStreamingClient.Listener {
-            private var liveBubble: TextView? = null
+            private var liveResponse: android.widget.TextView? = null
 
             override fun onStarted() {
-                if (!isFinishing) {
-                    liveBubble = chatScreen?.addStreamingBubble()
-                    chatScreen?.setStatus("NOVA is replying…")
-                }
+                if (!isFinishing) liveResponse = chatScreen?.addStreamingBubble()
             }
 
             override fun onChunk(text: String) {
                 if (!isFinishing) {
-                    if (liveBubble == null) liveBubble = chatScreen?.addStreamingBubble()
-                    liveBubble?.text = text
+                    if (liveResponse == null) liveResponse = chatScreen?.addStreamingBubble()
+                    liveResponse?.text = text
                     chatScreen?.scrollToBottom()
                 }
             }
@@ -169,12 +180,14 @@ class MainActivity : Activity() {
             override fun onCompleted(answer: String, firstTokenSeconds: Double, totalSeconds: Double) {
                 chatManager.addModelMessage(answer)
                 if (!isFinishing) {
-                    liveBubble?.text = answer
-                    liveBubble?.let { chatScreen?.attachSpeakerToBubble(it, answer) }
-                    if (voicePreferences.getBoolean("auto_speak_enabled", false)) speakText(answer)
-                    val first = String.format(java.util.Locale.US, "%.1f", firstTokenSeconds)
-                    val total = String.format(java.util.Locale.US, "%.1f", totalSeconds)
-                    setRequestUi(false, "First text ${first}s • Total ${total}s")
+                    liveResponse?.text = answer
+                    liveResponse?.let { chatScreen?.attachResponseActions(it, answer) }
+                    setRequestUi(false, "")
+                    if (voiceConversationEnabled) speakText(answer) {
+                        if (voiceConversationEnabled && !isFinishing) startVoiceListening()
+                    } else if (voicePreferences.getBoolean("auto_speak_enabled", false)) {
+                        speakText(answer)
+                    }
                 }
             }
 
@@ -182,16 +195,17 @@ class MainActivity : Activity() {
                 if (!isFinishing) {
                     if (partialAnswer.isEmpty()) chatScreen?.addChatBubble("assistant", message)
                     else {
-                        val visibleText = partialAnswer + "\n\n[Stream interrupted: $message]"
-                        liveBubble?.text = visibleText
-                        liveBubble?.let { chatScreen?.attachSpeakerToBubble(it, visibleText) }
+                        val visibleText = "$partialAnswer\n\n[Response interrupted: $message]"
+                        liveResponse?.text = visibleText
+                        liveResponse?.let { chatScreen?.attachResponseActions(it, visibleText) }
                     }
                     setRequestUi(false, "Something needs attention")
+                    if (voiceConversationEnabled) startVoiceListening()
                 }
             }
 
             override fun onCancelled() {
-                if (!isFinishing) setRequestUi(false, "Request stopped")
+                if (!isFinishing) setRequestUi(false, "Response stopped")
             }
         })
     }
@@ -205,10 +219,9 @@ class MainActivity : Activity() {
         if (!requestRunning) return
         geminiClient.cancel()
         requestRunning = false
-        setRequestUi(false, "Request stopped")
-        if (showMessage && chatScreen != null) chatScreen?.addChatBubble("assistant", "Request stopped.")
+        setRequestUi(false, "Response stopped")
+        if (showMessage && chatScreen != null) chatScreen?.addChatBubble("assistant", "Response stopped.")
     }
-
 
     private fun onVoiceInputTap() {
         if (listeningForSpeech) {
@@ -223,38 +236,66 @@ class MainActivity : Activity() {
         voiceManager?.startListening()
     }
 
+    private fun toggleVoiceConversation() {
+        if (voiceConversationEnabled) {
+            stopVoiceConversation()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            return
+        }
+        voiceConversationEnabled = true
+        chatScreen?.setVoiceModeState(true, "Starting voice conversation…")
+        startVoiceListening()
+    }
+
+    private fun startVoiceListening() {
+        if (!voiceConversationEnabled || requestRunning || isFinishing) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
+            return
+        }
+        voiceManager?.startListening()
+    }
+
+    private fun stopVoiceConversation() {
+        voiceConversationEnabled = false
+        stopVoiceInput()
+        voiceManager?.stopSpeaking()
+        chatScreen?.setVoiceModeState(false, "Voice conversation off")
+    }
+
     private fun stopVoiceInput() {
         voiceManager?.stopListening()
         listeningForSpeech = false
         chatScreen?.setMicActive(false)
     }
 
-    private fun saveAutoSpeak(enabled: Boolean) {
-        voicePreferences.edit().putBoolean("auto_speak_enabled", enabled).apply()
-        chatScreen?.setStatus(if (enabled) "Auto Speak enabled" else "Auto Speak disabled")
-    }
-
-    private fun speakText(text: String) {
-        if (voiceManager?.speak(text) != true) {
+    private fun speakText(text: String, onDone: (() -> Unit)? = null) {
+        if (voiceManager?.speak(text, onDone) != true) {
+            if (voiceConversationEnabled) stopVoiceConversation()
             Toast.makeText(this, "Text-to-speech is unavailable. Check installed voice/language data.", Toast.LENGTH_LONG).show()
-        } else {
+        } else if (!voiceConversationEnabled) {
             chatScreen?.setStatus("Speaking response aloud")
         }
     }
 
-    private fun readLatestResponse() {
-        var latest = ""
-        for (index in chatManager.size() - 1 downTo 0) {
-            val item = chatManager.messageAt(index) ?: continue
-            if (item.optString("role") != "model") continue
-            latest = item.optJSONArray("parts")?.optJSONObject(0)?.optString("text").orEmpty()
-            if (latest.isNotBlank()) break
-        }
-        if (latest.isBlank()) {
-            Toast.makeText(this, "NOVA has no response to read yet.", Toast.LENGTH_SHORT).show()
+    private fun regenerateLatest() {
+        if (requestRunning) return
+        val history = chatManager.history
+        if (history.length() < 2) return
+        val last = history.optJSONObject(history.length() - 1)
+        if (last?.optString("role") != "model") {
+            Toast.makeText(this, "There is no completed response to regenerate.", Toast.LENGTH_SHORT).show()
             return
         }
-        speakText(latest)
+        val apiKey = apiKeyManager.getApiKey() ?: return
+        if (!chatManager.removeLastModelMessage()) return
+        chatScreen?.rebuildChatBubbles(chatManager.history)
+        geminiClient.resetCancellation()
+        setRequestUi(true, "NOVA is thinking…")
+        networkExecutor.execute { performGeminiRequest(apiKey) }
     }
 
     @Deprecated("Use the platform permission result callback")
@@ -262,10 +303,13 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_RECORD_AUDIO) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                voiceManager?.startListening()
+                if (currentScreen == SCREEN_CHAT) {
+                    if (voiceConversationEnabled) startVoiceListening() else voiceManager?.startListening()
+                }
             } else {
-                chatScreen?.setStatus("Microphone permission was not granted")
-                Toast.makeText(this, "Allow microphone permission to use voice input.", Toast.LENGTH_LONG).show()
+                voiceConversationEnabled = false
+                chatScreen?.setVoiceModeState(false, "Microphone permission was not granted")
+                Toast.makeText(this, "Allow microphone permission to use voice features.", Toast.LENGTH_LONG).show()
             }
         }
     }
