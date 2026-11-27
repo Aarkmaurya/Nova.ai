@@ -23,7 +23,7 @@ import java.util.concurrent.Executors
 /** Activity coordinator: screen navigation and Gemini request lifecycle only. */
 class MainActivity : Activity() {
     private val apiKeyManager by lazy { ApiKeyManager(this) }
-    private val chatManager = ChatManager()
+    private val chatManager by lazy { ChatManager(applicationContext) }
     private val geminiClient = GeminiStreamingClient()
     private val networkExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var requestRunning = false
@@ -89,7 +89,7 @@ class MainActivity : Activity() {
 
     private fun showChat() {
         val screen = ChatScreen(
-            this, ::showHome, ::sendMessage, { stopRequest() },
+            this, ::showHome, ::startNewChat, ::sendMessage, { stopRequest() },
             ::onVoiceInputTap, ::readLatestResponse, ::speakText, ::saveAutoSpeak,
             voicePreferences.getBoolean("auto_speak_enabled", false)
         )
@@ -113,6 +113,20 @@ class MainActivity : Activity() {
         if (chatManager.size() == 0) screen.addChatBubble("assistant", "Hello! I’m NOVA. Ask me anything to get started.")
         else screen.rebuildChatBubbles(chatManager.history)
         screen.scrollToBottom()
+    }
+
+
+    private fun startNewChat() {
+        if (requestRunning) {
+            Toast.makeText(this, "Wait until NOVA finishes the current response.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (chatManager.createNewChat()) {
+            chatScreen?.showNewChatWelcome()
+            chatScreen?.setStatus("New chat started • Previous chat saved")
+        } else {
+            chatScreen?.setStatus("This chat is already empty")
+        }
     }
 
     private fun sendMessage() {
